@@ -1,166 +1,123 @@
-import json
 import re
-import uuid
 from dataclasses import dataclass
-from typing import Any
+from io import BytesIO
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from pypdf import PdfReader
 from functools import lru_cache
+from pypdf import PdfReader
 from transformers import pipeline
 
 from app.core.config import settings
 from app.models.document import DocumentAnalysis
 from app.schemas.documents import DocumentAnalysisResult, FacturaData, InformacionData, ProductoItem
+from app.services.interfaces import (
+    DocumentClassifierProtocol,
+    DocumentRepositoryProtocol,
+    InformationAnalyzerProtocol,
+    InvoiceParserProtocol,
+    StorageServiceProtocol,
+    TextExtractorProtocol,
+)
 from app.services.storage import S3StorageService
 
 
 @dataclass
 class AnalyzerResult:
+    """Representa el registro almacenado y el payload de respuesta."""
+
     record: DocumentAnalysis
     payload: DocumentAnalysisResult
 
 
-class DocumentAnalyzerService:
-    """Servicio que centraliza la subida a S3, el uso de Textract y los aportes de IA."""
+class DocumentTextExtractor:
+    """Extrae texto plano desde PDFs o imágenes usando Textract."""
 
-    def __init__(self, db):
+    def __init__(self, textract_client=None):
+        self.textract = textract_client or self._build_textract_client()
+
+    def extract(self, filename: str, content: bytes) -> str:
         """
-        Inicializa el analizador con las dependencias de base de datos y AWS/Textract.
+        Obtiene el texto del archivo recibido y devuelve una versión saneada.
 
         Args:
-            db (Session): Sesión activa de SQLAlchemy utilizada para almacenar el resultado del análisis.
+            filename (str): Nombre del archivo para detectar su tipo.
+            content (bytes): Bytes crudos del documento.
+
+        Returns:
+            str: Texto normalizado en UTF-8 sin caracteres de control.
         """
-        self.db = db
-        self.s3_service = S3StorageService()
+        if filename.lower().endswith(".pdf"):
+            raw_text = self._extract_pdf(content)
+        else:
+            raw_text = self._extract_image(content)
+        return self._sanitize(raw_text)
+
+    @staticmethod
+    def _build_textract_client():
+        """Crea el cliente de Textract con las credenciales configuradas."""
         session = boto3.session.Session(
             aws_access_key_id=settings.aws_access_key_id,
             aws_secret_access_key=settings.aws_secret_access_key,
             region_name=settings.aws_region,
         )
-        self.textract = session.client("textract")
-        self.summary_pipeline = get_summary_pipeline()
-        self.sentiment_pipeline = get_sentiment_pipeline()
+        return session.client("textract")
 
-    def analyze(self, *, filename: str, content: bytes) -> AnalyzerResult:
-        """
-        Clasifica, extrae y persiste el análisis de un documento binario.
+    @staticmethod
+    def _extract_pdf(content: bytes) -> str:
+        """Lee un PDF con PyPDF e integra sus páginas."""
+        reader = PdfReader(BytesIO(content))
+        return "\n".join(page.extract_text() or "" for page in reader.pages)
 
-        Args:
-            filename (str): Nombre original del archivo cargado.
-            content (bytes): Datos crudos del archivo recibidos en la carga multipart.
-
-        Returns:
-            AnalyzerResult: Contenedor con el registro ORM y el payload de respuesta.
-        """
-        text_content = self._sanitize_text(self._extract_text(filename, content))
-        document_type = self._classify_text(text_content)
-
-        if document_type == "FACTURA":
-            parsed = self._extract_invoice(text_content)
-            info = DocumentAnalysisResult(
-                document_type=document_type,
-                factura=parsed,
-                informacion=None,
-                raw_text=text_content,
-            )
-            sentiment = None
-            summary = parsed.total and f"Factura con total estimado {parsed.total}"
-        else:
-            parsed = self._extract_information(text_content)
-            info = DocumentAnalysisResult(
-                document_type=document_type,
-                factura=None,
-                informacion=parsed,
-                raw_text=text_content,
-            )
-            sentiment = parsed.sentimiento
-            summary = parsed.resumen
-
-        s3_key = self._upload_document(filename, content)
-
-        record = DocumentAnalysis(
-            filename=filename,
-            document_type=document_type,
-            s3_key=s3_key,
-            extracted_payload=json.dumps(info.dict(), ensure_ascii=False),
-            ai_summary=summary,
-            sentiment=sentiment,
-        )
-        self.db.add(record)
-        self.db.commit()
-        self.db.refresh(record)
-
-        return AnalyzerResult(record=record, payload=info)
-
-    def _upload_document(self, filename: str, content: bytes) -> str | None:
-        """
-        Sube el archivo binario a S3 y devuelve la clave del objeto.
-
-        Args:
-            filename (str): Nombre original, usado para conservar la extensión en S3.
-            content (bytes): Bytes que se enviarán al almacenamiento.
-
-        Returns:
-            str | None: Clave del objeto generado si la subida tiene éxito, None en caso contrario.
-        """
-        if not content:
-            return None
-        key = f"documents/{uuid.uuid4()}/{filename}"
-        try:
-            self.s3_service.client.put_object(Bucket=self.s3_service.bucket, Key=key, Body=content)
-            return key
-        except (ClientError, BotoCoreError):
-            return None
-
-    def _extract_text(self, filename: str, content: bytes) -> str:
-        """
-        Extrae el contenido textual de un PDF o imagen usando Textract o lectura directa.
-
-        Args:
-            filename (str): Nombre del archivo para distinguir PDFs de imágenes.
-            content (bytes): Contenido binario completo del archivo.
-
-        Returns:
-            str: Texto en UTF-8 obtenido de la mejor forma posible.
-        """
-        if filename.lower().endswith(".pdf"):
-            import io
-
-            reader = PdfReader(io.BytesIO(content))
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
+    def _extract_image(self, content: bytes) -> str:
+        """Ejecuta Textract (o fallback) para imágenes."""
         try:
             response = self.textract.detect_document_text(Document={"Bytes": content})
             return " ".join(
-                [item["DetectedText"] for item in response.get("Blocks", []) if item["BlockType"] == "LINE"]
+                item["DetectedText"] for item in response.get("Blocks", []) if item["BlockType"] == "LINE"
             )
         except (ClientError, BotoCoreError):
             return content.decode("utf-8", errors="ignore")
 
-    def _classify_text(self, text: str) -> str:
+    @staticmethod
+    def _sanitize(text: str) -> str:
+        """Limpia caracteres de control y reduce espacios consecutivos."""
+        clean = text.replace("\x00", " ")
+        clean = re.sub(r"\s+", " ", clean).strip()
+        return clean[:10000]
+
+
+class DocumentClassifier:
+    """Determina si el texto corresponde a una factura o información general."""
+
+    KEYWORDS = ["factura", "invoice", "subtotal", "iva", "total"]
+
+    def classify(self, text: str) -> str:
         """
-        Determina si el documento se asemeja a una factura o a información general.
+        Aplica un conteo de palabras clave para etiquetar el documento.
 
         Args:
-            text (str): Texto plano extraído del documento.
+            text (str): Texto plano extraído del archivo.
 
         Returns:
-            str: "FACTURA" cuando se detectan palabras clave, de lo contrario "INFORMACION".
+            str: "FACTURA" cuando hay suficientes palabras clave, "INFORMACION" en caso contrario.
         """
-        keywords = ["factura", "invoice", "subtotal", "iva", "total"]
-        score = sum(1 for word in keywords if word in text.lower())
+        score = sum(1 for word in self.KEYWORDS if word in text.lower())
         return "FACTURA" if score >= 2 else "INFORMACION"
 
-    def _extract_invoice(self, text: str) -> FacturaData:
+
+class InvoiceParser:
+    """Convierte el texto de una factura en un objeto FacturaData."""
+
+    def parse(self, text: str) -> FacturaData:
         """
-        Interpreta el texto de una factura y lo transforma en campos estructurados.
+        Localiza clientes, totales, fechas y productos dentro del texto plano.
 
         Args:
-            text (str): Texto plano con metadatos y tablas típicas de una factura.
+            text (str): Texto completo del documento.
 
         Returns:
-            FacturaData: Modelo con cliente, proveedor, productos y totales identificados.
+            FacturaData: Datos estructurados de la factura.
         """
         cliente = self._extract_party_block(text, "cliente")
         proveedor = self._extract_party_block(text, "proveedor")
@@ -183,35 +140,9 @@ class DocumentAnalyzerService:
             productos=productos,
         )
 
-    def _extract_information(self, text: str) -> InformacionData:
-        """
-        Genera un resumen y sentimiento para un documento no clasificado como factura.
-
-        Args:
-            text (str): Texto completo extraído del documento.
-
-        Returns:
-            InformacionData: Estructura con descripción, resumen y etiqueta de sentimiento.
-        """
-        descripcion = text[:400]
-        summary = self.summary_pipeline(descripcion, max_length=80)[0]["generated_text"]
-        sentiment_raw = self.sentiment_pipeline(descripcion[:512])[0]["label"]
-        sentiment_map = {"POSITIVE": "positivo", "NEGATIVE": "negativo"}
-        sentimiento = sentiment_map.get(sentiment_raw.upper(), "neutral")
-        return InformacionData(descripcion=descripcion, resumen=summary, sentimiento=sentimiento)
-
     @staticmethod
     def _extract_party_block(text: str, label: str):
-        """
-        Extrae el bloque de nombre y dirección correspondiente al label solicitado.
-
-        Args:
-            text (str): Representación textual completa del documento.
-            label (str): Palabra clave a buscar, habitualmente "cliente" o "proveedor".
-
-        Returns:
-            dict | None: Diccionario con las claves "nombre" y "direccion" o None si no se encuentra.
-        """
+        """Extrae nombre y dirección asociados a la etiqueta dada."""
         pattern = re.compile(
             rf"{label}\s*:\s*(.+?)(?=(?:cliente|proveedor|número\s+de\s+factura|numero\s+de\s+factura|número|numero|invoice\s+number|fecha|cantidad|total|descripción|descripcion|$))",
             re.IGNORECASE | re.DOTALL,
@@ -258,17 +189,17 @@ class DocumentAnalyzerService:
         matches = re.findall(pattern, text, re.IGNORECASE)
         if not matches:
             return None
-        return DocumentAnalyzerService._normalize_amount(matches[-1])
+        return InvoiceParser._normalize_amount(matches[-1])
 
     def _extract_products(self, text: str):
         """
-        Analiza la sección tabular de la factura y genera objetos ProductoItem.
+        Construye los ProductoItem encontrados en la sección tabular.
 
         Args:
-            text (str): Texto completo de la factura utilizado para ubicar la tabla.
+            text (str): Texto donde se ubica la tabla.
 
         Returns:
-            list[ProductoItem]: Lista de productos con cantidad, descripción y valores numéricos.
+            list[ProductoItem]: Lista de productos detectados.
         """
         productos: list[ProductoItem] = []
         table_match = re.search(
@@ -292,13 +223,6 @@ class DocumentAnalyzerService:
         return productos
 
     @staticmethod
-    def _sanitize_text(text: str) -> str:
-        """Quita caracteres de control y limita el texto a 10k caracteres."""
-        clean = text.replace("\x00", " ")
-        clean = re.sub(r"\s+", " ", clean).strip()
-        return clean[:10000]
-
-    @staticmethod
     def _normalize_amount(value: str | None) -> float | None:
         """Convierte un string con formato monetario en float (o None)."""
         if not value:
@@ -318,6 +242,127 @@ class DocumentAnalyzerService:
                 return None
 
 
+class InformationAnalyzer:
+    """Genera resumen y sentimiento para documentos de texto general."""
+
+    def __init__(self, summary_pipeline=None, sentiment_pipeline=None):
+        self.summary_pipeline = summary_pipeline or get_summary_pipeline()
+        self.sentiment_pipeline = sentiment_pipeline or get_sentiment_pipeline()
+
+    def analyze(self, text: str) -> InformacionData:
+        """
+        Construye un resumen corto y detecta sentimiento del texto.
+
+        Args:
+            text (str): Contenido completo del documento.
+
+        Returns:
+            InformacionData: Modelo con descripción, resumen y sentimiento.
+        """
+        descripcion = text[:400]
+        resumen = self._build_summary(descripcion)
+        sentimiento = self._detect_sentiment(descripcion)
+        return InformacionData(descripcion=descripcion, resumen=resumen, sentimiento=sentimiento)
+
+    def _build_summary(self, descripcion: str) -> str:
+        """Genera el resumen usando el pipeline configurado."""
+        if not descripcion.strip():
+            return ""
+        result = self.summary_pipeline(descripcion, max_length=80)
+        return result[0]["generated_text"]
+
+    def _detect_sentiment(self, descripcion: str) -> str:
+        """Mapea el sentimiento del texto a positivo/negativo/neutral."""
+        if not descripcion.strip():
+            return "neutral"
+        sentiment_raw = self.sentiment_pipeline(descripcion[:512])[0]["label"]
+        sentiment_map = {"POSITIVE": "positivo", "NEGATIVE": "negativo"}
+        return sentiment_map.get(sentiment_raw.upper(), "neutral")
+
+
+class DocumentAnalyzerService:
+    """Coordina extracción, parsing y persistencia del análisis de documentos."""
+
+    def __init__(
+        self,
+        repository: DocumentRepositoryProtocol,
+        *,
+        storage_service: StorageServiceProtocol | None = None,
+        text_extractor: TextExtractorProtocol | None = None,
+        classifier: DocumentClassifierProtocol | None = None,
+        invoice_parser: InvoiceParserProtocol | None = None,
+        info_analyzer: InformationAnalyzerProtocol | None = None,
+    ):
+        """
+        Configura las dependencias necesarias para procesar documentos.
+
+        Args:
+            repository (DocumentRepositoryProtocol): Encargado de persistir resultados.
+            storage_service (StorageServiceProtocol | None): Servicio para subir archivos.
+            text_extractor (TextExtractorProtocol | None): Obtiene texto plano del archivo.
+            classifier (DocumentClassifierProtocol | None): Determina el tipo del documento.
+            invoice_parser (InvoiceParserProtocol | None): Convierte facturas a datos estructurados.
+            info_analyzer (InformationAnalyzerProtocol | None): Resume documentos informativos.
+        """
+        self.repository = repository
+        self.storage_service = storage_service or S3StorageService()
+        self.text_extractor = text_extractor or DocumentTextExtractor()
+        self.classifier = classifier or DocumentClassifier()
+        self.invoice_parser = invoice_parser or InvoiceParser()
+        self.info_analyzer = info_analyzer or InformationAnalyzer()
+
+    def analyze(self, *, filename: str, content: bytes) -> AnalyzerResult:
+        """
+        Ejecuta todo el flujo de análisis y persiste el resultado final.
+
+        Args:
+            filename (str): Nombre original del archivo.
+            content (bytes): Bytes recibidos durante la carga.
+
+        Returns:
+            AnalyzerResult: Estructura con el registro ORM y el payload de respuesta.
+        """
+        text_content = self.text_extractor.extract(filename, content)
+        document_type = self.classifier.classify(text_content)
+
+        if document_type == "FACTURA":
+            parsed = self.invoice_parser.parse(text_content)
+            info = DocumentAnalysisResult(
+                document_type=document_type,
+                factura=parsed,
+                informacion=None,
+                raw_text=text_content,
+            )
+            sentiment = None
+            summary = parsed.total and f"Factura con total estimado {parsed.total}"
+        else:
+            parsed = self.info_analyzer.analyze(text_content)
+            info = DocumentAnalysisResult(
+                document_type=document_type,
+                factura=None,
+                informacion=parsed,
+                raw_text=text_content,
+            )
+            sentiment = parsed.sentimiento
+            summary = parsed.resumen
+
+        try:
+            s3_key = self.storage_service.upload(content=content, filename=filename, prefix="documents")
+        except RuntimeError:
+            s3_key = None
+
+        record = self.repository.save_analysis(
+            filename=filename,
+            document_type=document_type,
+            s3_key=s3_key,
+            payload=info,
+            ai_summary=summary,
+            sentiment=sentiment,
+        )
+
+        return AnalyzerResult(record=record, payload=info)
+
+
 @lru_cache(maxsize=1)
 def get_summary_pipeline():
     """Carga una vez el pipeline de resumen y lo reutiliza."""
@@ -327,5 +372,5 @@ def get_summary_pipeline():
 @lru_cache(maxsize=1)
 def get_sentiment_pipeline():
     """Carga una vez el pipeline de sentimiento y lo reutiliza."""
-    return pipeline("sentiment-analysis")
+    return pipeline("sentiment-analysis", model=settings.sentiment_model)
 

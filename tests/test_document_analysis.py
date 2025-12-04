@@ -1,10 +1,6 @@
 import pytest
 
-from app.services.document_analysis import DocumentAnalyzerService
-
-
-def _service_without_init():
-    return DocumentAnalyzerService.__new__(DocumentAnalyzerService)
+from app.services.document_analysis import InvoiceParser
 
 
 @pytest.mark.parametrize(
@@ -68,7 +64,8 @@ def _service_without_init():
     ],
 )
 def test_extract_party_block_cases(label, text, expected):
-    result = DocumentAnalyzerService._extract_party_block(text, label)
+    parser = InvoiceParser()
+    result = parser._extract_party_block(text, label)
     assert result == expected
 
 
@@ -95,8 +92,8 @@ Total de la factura: 1
     ],
 )
 def test_extract_products_cases(line, expected):
-    analyzer = _service_without_init()
-    items = analyzer._extract_products(PRODUCT_TEMPLATE.format(line=line))
+    parser = InvoiceParser()
+    items = parser._extract_products(PRODUCT_TEMPLATE.format(line=line))
     assert len(items) >= 1
     first = items[0]
     assert first.cantidad == expected["cantidad"]

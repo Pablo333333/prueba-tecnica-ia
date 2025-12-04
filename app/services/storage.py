@@ -16,8 +16,19 @@ class S3StorageService:
         self.client = session.client("s3")
         self.bucket = settings.aws_s3_bucket
 
-    def upload(self, *, content: bytes, filename: str) -> str:
-        key = f"uploads/{uuid.uuid4()}/{filename}"
+    def upload(self, *, content: bytes, filename: str, prefix: str = "uploads") -> str:
+        """
+        Sube bytes al bucket configurado usando el prefijo indicado.
+
+        Args:
+            content (bytes): Contenido bruto a subir.
+            filename (str): Nombre del archivo original.
+            prefix (str): Carpeta lógica para organizar objetos.
+
+        Returns:
+            str: Clave completa generada en S3.
+        """
+        key = f"{prefix}/{uuid.uuid4()}/{filename}"
         try:
             self.client.put_object(Bucket=self.bucket, Key=key, Body=content)
         except (ClientError, BotoCoreError) as exc:

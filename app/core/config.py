@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     sqlserver_uri: str = Field(..., validation_alias="SQLSERVER_URI")
 
     ai_model: str = Field(default="google/flan-t5-small", validation_alias="AI_MODEL")
+    sentiment_model: str = Field(
+        default="distilbert/distilbert-base-uncased-finetuned-sst-2-english",
+        validation_alias="SENTIMENT_MODEL",
+    )
     timezone: str = Field(default="UTC", validation_alias="APP_TIMEZONE")
 
     allowed_roles: list[str] = Field(default_factory=lambda: ["data_uploader"])

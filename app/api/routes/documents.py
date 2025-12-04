@@ -9,6 +9,7 @@ from app.core.time_utils import to_local_datetime
 from app.schemas.documents import DocumentAnalysisResponse
 from app.services.document_analysis import DocumentAnalyzerService
 from app.services.events import EventService
+from app.services.repository import DocumentRepository
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -36,7 +37,8 @@ async def analyze_document(
         )
 
     content = await file.read()
-    analyzer = DocumentAnalyzerService(db)
+    repository = DocumentRepository(db)
+    analyzer = DocumentAnalyzerService(repository)
     event_service = EventService(db)
 
     result = analyzer.analyze(filename=file.filename, content=content)

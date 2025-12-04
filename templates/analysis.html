@@ -124,6 +124,8 @@
         if (!response.ok) {
           if (response.status === 401) {
             showNotice("El token expiró o no es válido. Vuelve a iniciar sesión.", "error");
+          } else if (response.status === 403) {
+            showNotice("Tu rol no tiene permisos para analizar documentos.", "error");
           } else {
             const error = await response.json();
             showNotice(error.detail || "Error en el análisis", "error");

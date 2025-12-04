@@ -24,9 +24,10 @@ API construida con **FastAPI** que cubre:
 3. Variables de entorno (ver `.env.example`):
    - `JWT_SECRET_KEY`
    - `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET`
-   - `SQLSERVER_URI` (ODBC)
-   - `AI_MODEL` (opcional, default `google/flan-t5-small`)
-   - `APP_TIMEZONE` (opcional, default `UTC`, ej. `America/Argentina/Buenos_Aires`)
+   - `SQLSERVER_URL` 
+   - `AI_MODEL` 
+   - `SENTIMENT_MODEL` 
+   - `APP_TIMEZONE` 
 4. Ejecutar:
    ```bash
    uvicorn app.main:app --reload
@@ -76,15 +77,3 @@ curl -X POST http://localhost:8000/auth/refresh \
 
 Cada evento relevante (carga, análisis IA, interacciones) se guarda en `event_logs`.  
 Los filtros y exportación a Excel (`historial.xlsx`) se ejecutan desde `/history/events` y `/history/events/export`.
-
-## GitHub
-
-```bash
-git init
-git add .
-git commit -m "feat: implementar APIs FastAPI + módulos IA"
-git remote add origin https://github.com/<user>/<repo>.git
-git push -u origin master
-```
-
-

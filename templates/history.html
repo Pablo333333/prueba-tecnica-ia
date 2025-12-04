@@ -126,6 +126,8 @@
         if (!response.ok) {
           if (response.status === 401) {
             showNotice("El token expiró o no es válido. Vuelve a iniciar sesión.", "error");
+          } else if (response.status === 403) {
+            showNotice("Tu rol no tiene permisos para consultar el histórico.", "error");
           } else {
             showNotice("Error al consultar eventos. Intenta nuevamente.", "error");
             bodyEl.innerHTML = `<tr><td colspan="4">Error al consultar eventos</td></tr>`;
@@ -160,6 +162,8 @@
         if (!response.ok) {
           if (response.status === 401) {
             showNotice("El token expiró o no es válido. Vuelve a iniciar sesión.", "error");
+          } else if (response.status === 403) {
+            showNotice("Tu rol no tiene permisos para exportar el histórico.", "error");
           } else {
             showNotice("No se pudo exportar el Excel.", "error");
           }
