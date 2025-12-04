@@ -136,13 +136,13 @@ class DocumentAnalyzerService:
     @staticmethod
     def _extract_party_block(text: str, label: str):
         pattern = re.compile(
-            rf"{label}\s*:\s*(.+?)(?=(?:cliente|proveedor|número\s+de\s+factura|invoice\s+number|fecha|cantidad|total|$))",
+            rf"{label}\s*:\s*(.+?)(?=(?:cliente|proveedor|número\s+de\s+factura|numero\s+de\s+factura|número|numero|invoice\s+number|fecha|cantidad|total|descripción|descripcion|$))",
             re.IGNORECASE | re.DOTALL,
         )
         match = pattern.search(text)
         if not match:
             return None
-        block = re.sub(r"\s+", " ", match.group(1)).strip(" ,")
+        block = re.sub(r"\s+", " ", match.group(1)).strip(" ,:")
         cut_keywords = [
             r"\bAv\.?\b",
             r"\bAvenida\b",
@@ -190,7 +190,7 @@ class DocumentAnalyzerService:
         )
         table_body = table_match.group(1) if table_match else text
         pattern = re.compile(
-            r"(\d+)\s+([A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ\-\.\s]+?)\s+\$?([\d.,]+)\s+\$?([\d.,]+)"
+            r"(\d+)\s+([A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ\-\.\s]+)\s+\$?([\d.,]+)\s+\$?([\d.,]+)"
         )
         for qty, name, price, total in pattern.findall(table_body):
             productos.append(

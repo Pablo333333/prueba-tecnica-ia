@@ -1,8 +1,10 @@
+from pydantic import Field, ConfigDict
 from pydantic_settings import BaseSettings
-from pydantic import Field
 
 
 class Settings(BaseSettings):
+    model_config = ConfigDict(env_file=".env", extra="ignore")
+
     app_name: str = "Data Quality API"
     environment: str = Field(default="local", validation_alias="APP_ENV")
 
@@ -22,10 +24,6 @@ class Settings(BaseSettings):
     timezone: str = Field(default="UTC", validation_alias="APP_TIMEZONE")
 
     allowed_roles: list[str] = Field(default_factory=lambda: ["data_uploader"])
-
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
 
 
 settings = Settings()
