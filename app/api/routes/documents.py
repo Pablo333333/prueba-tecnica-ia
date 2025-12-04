@@ -19,6 +19,16 @@ async def analyze_document(
     user: dict = Depends(require_roles("data_uploader")),
     db: Session = Depends(get_db),
 ):
+    """Analiza un documento PDF/imagen y guarda el resultado estructurado.
+
+    Args:
+        file (UploadFile): Documento recibido en la petición.
+        user (dict): Usuario autenticado (payload JWT).
+        db (Session): Sesión de base de datos para persistir análisis y eventos.
+
+    Returns:
+        DocumentAnalysisResponse: Detalle del documento analizado con ID, clave S3 y payload (factura o información).
+    """
     if file.content_type not in {"application/pdf", "image/png", "image/jpeg"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

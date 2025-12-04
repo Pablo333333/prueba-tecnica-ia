@@ -27,6 +27,18 @@ async def upload_file(
     user: dict = Depends(require_roles("data_uploader")),
     db: Session = Depends(get_db),
 ) -> FileUploadResponse:
+    """Carga un CSV, lo valida y lo guarda en S3/SQL.
+
+    Args:
+        param_a (str): Texto adicional enviado en el formulario.
+        param_b (str): Segundo texto adicional del formulario.
+        file (UploadFile): Archivo CSV recibido en multipart/form-data.
+        user (dict): Payload JWT del usuario autenticado.
+        db (Session): Sesión de base de datos para persistir la carga.
+
+    Returns:
+        FileUploadResponse: Resumen del archivo guardado con ID, clave S3, filas, validaciones y resumen IA.
+    """
     raw_content = await file.read()
     if not raw_content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Archivo vacío")
