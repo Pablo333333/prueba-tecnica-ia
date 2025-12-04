@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, require_roles
+from app.core.time_utils import to_local_datetime
 from app.models.upload import UploadedFile, UploadedRow
 from app.schemas.files import FileUploadResponse, ValidationResult
 from app.services.ai import AIInsightsService
@@ -79,7 +80,7 @@ async def upload_file(
         file_id=uploaded_file.id,
         s3_key=s3_key,
         stored_rows=len(rows),
-        uploaded_at=uploaded_file.created_at,
+        uploaded_at=to_local_datetime(uploaded_file.created_at),
         validations=[ValidationResult(**item) for item in validations],
         ai_summary=ai_summary,
     )

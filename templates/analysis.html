@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Analizador de Documentos</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <style>
+      body {
+        padding: 2rem;
+      }
+      .grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      }
+      pre {
+        max-height: 280px;
+        overflow: auto;
+        background: #0b1622;
+        color: #e6edf3;
+      }
+      #analysis-notice {
+        margin-top: 1rem;
+        padding: 0.75rem 1rem;
+        border-radius: 6px;
+        display: none;
+      }
+      #analysis-notice.error {
+        background: #ffe2e2;
+        color: #7a0b0b;
+      }
+      #analysis-notice.info {
+        background: #e2f0ff;
+        color: #0b3d7a;
+      }
+      .align-end {
+        display: flex;
+        align-items: flex-end;
+        justify-content: flex-end;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <h1>Analizador de Documentos con IA</h1>
+      <p>
+        <a href="/web/history" class="secondary">Ir al histórico de eventos →</a>
+      </p>
+      <form id="token-form" class="grid">
+        <label>
+          Token JWT
+          <input type="text" id="token-input" placeholder="Pega aquí tu JWT" />
+        </label>
+        <div class="align-end">
+          <button type="submit">Guardar token</button>
+        </div>
+      </form>
+      <form id="upload-form">
+        <label>
+          Selecciona un PDF, JPG o PNG
+          <input type="file" id="file-input" name="file" accept=".pdf,.png,.jpg,.jpeg" required />
+        </label>
+        <button type="submit">Analizar</button>
+      </form>
+      <p id="analysis-notice"></p>
+      <section id="result" hidden>
+        <h2>Resultado</h2>
+        <div class="grid">
+          <article>
+            <h3>Metadatos</h3>
+            <ul id="meta"></ul>
+          </article>
+          <article>
+            <h3>Contenido</h3>
+            <pre id="payload"></pre>
+          </article>
+        </div>
+      </section>
+    </main>
+    <script>
+      const tokenForm = document.getElementById("token-form");
+      const tokenInput = document.getElementById("token-input");
+      const form = document.getElementById("upload-form");
+      const resultSection = document.getElementById("result");
+      const metaList = document.getElementById("meta");
+      const payloadPre = document.getElementById("payload");
+      tokenInput.value = localStorage.getItem("jwt") || "";
+
+      tokenForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const tokenValue = tokenInput.value.trim();
+        if (!tokenValue) {
+          showNotice("Debes pegar un token válido.", "error");
+          return;
+        }
+        localStorage.setItem("jwt", tokenValue);
+        const status = validateToken(tokenValue);
+        if (status === "expired") {
+          showNotice("Token guardado, pero ya expiró. Solicita uno nuevo antes de continuar.", "error");
+        } else if (status === "invalid") {
+          showNotice("El token parece inválido. Vuelve a generarlo.", "error");
+        } else {
+          showNotice("Token guardado y vigente.", "info");
+        }
+      });
+
+      const noticeEl = document.getElementById("analysis-notice");
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const file = document.getElementById("file-input").files[0];
+        if (!file) {
+          alert("Selecciona un archivo");
+          return;
+        }
+        const formData = new FormData();
+        formData.append("file", file);
+        const token = localStorage.getItem("jwt");
+        const response = await fetch("/documents/analyze", {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: formData,
+        });
+        if (!response.ok) {
+          if (response.status === 401) {
+            showNotice("El token expiró o no es válido. Vuelve a iniciar sesión.", "error");
+          } else {
+            const error = await response.json();
+            showNotice(error.detail || "Error en el análisis", "error");
+          }
+          return;
+        }
+        const data = await response.json();
+        metaList.innerHTML = `
+          <li><strong>ID:</strong> ${data.document_id}</li>
+          <li><strong>Tipo:</strong> ${data.result.document_type}</li>
+          <li><strong>S3:</strong> ${data.s3_key || "N/A"}</li>
+          <li><strong>Fecha:</strong> ${new Date(data.created_at).toLocaleString()}</li>
+        `;
+        payloadPre.textContent = JSON.stringify(data.result, null, 2);
+        showNotice("", "info", true);
+        resultSection.hidden = false;
+      });
+
+      function showNotice(message, type = "info", hide = false) {
+        if (hide || !message) {
+          noticeEl.style.display = "none";
+          noticeEl.textContent = "";
+          noticeEl.className = "";
+          return;
+        }
+        noticeEl.textContent = message;
+        noticeEl.className = type === "error" ? "error" : "info";
+        noticeEl.style.display = "block";
+      }
+
+      function validateToken(token) {
+        const parts = token.split(".");
+        if (parts.length !== 3) {
+          return "invalid";
+        }
+        try {
+          const payload = JSON.parse(atob(base64UrlToBase64(parts[1])));
+          if (!payload.exp) {
+            return "unknown";
+          }
+          const now = Math.floor(Date.now() / 1000);
+          return payload.exp < now ? "expired" : "valid";
+        } catch (error) {
+          return "invalid";
+        }
+      }
+
+      function base64UrlToBase64(value) {
+        return value.replace(/-/g, "+").replace(/_/g, "/");
+      }
+
+    </script>
+  </body>
+</html>
+

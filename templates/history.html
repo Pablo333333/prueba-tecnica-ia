@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Histórico de Eventos</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <style>
+      body {
+        padding: 2rem;
+      }
+      .align-end {
+        display: flex;
+        align-items: flex-end;
+        justify-content: flex-end;
+      }
+      table {
+        width: 100%;
+      }
+      tbody {
+        font-size: 0.9rem;
+      }
+      #notice {
+        margin-top: 1rem;
+        padding: 0.75rem 1rem;
+        border-radius: 6px;
+        display: none;
+      }
+      #notice.error {
+        background: #ffe2e2;
+        color: #7a0b0b;
+      }
+      #notice.info {
+        background: #e2f0ff;
+        color: #0b3d7a;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <h1>Histórico de Eventos</h1>
+      <p>
+        <a href="/web/analysis" class="secondary">← Volver al cargador de documentos</a>
+      </p>
+      <form id="token-form" class="grid">
+        <label>
+          Token JWT
+          <input type="text" id="token-input" placeholder="Pega aquí tu JWT" />
+        </label>
+        <div class="align-end">
+          <button type="submit">Guardar token</button>
+        </div>
+      </form>
+      <form id="filters" class="grid">
+        <label>
+          Tipo
+          <select name="event_type">
+            <option value="">Todos</option>
+            <option value="Carga de documento">Carga de documento</option>
+            <option value="IA">IA</option>
+            <option value="Interacción del usuario">Interacción del usuario</option>
+          </select>
+        </label>
+        <label>
+          Descripción
+          <input type="text" name="description" />
+        </label>
+        <label>
+          Desde
+          <input type="datetime-local" name="start_date" />
+        </label>
+        <label>
+          Hasta
+          <input type="datetime-local" name="end_date" />
+        </label>
+        <div>
+          <button type="submit">Filtrar</button>
+          <button type="button" id="export-btn">Exportar Excel</button>
+        </div>
+      </form>
+      <p id="notice"></p>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Tipo</th>
+            <th>Descripción</th>
+            <th>Fecha</th>
+          </tr>
+        </thead>
+        <tbody id="events-body"></tbody>
+      </table>
+    </main>
+    <script>
+      const tokenForm = document.getElementById("token-form");
+      const tokenInput = document.getElementById("token-input");
+      const bodyEl = document.getElementById("events-body");
+      const form = document.getElementById("filters");
+      tokenInput.value = localStorage.getItem("jwt") || "";
+
+      const noticeEl = document.getElementById("notice");
+
+      tokenForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const tokenValue = tokenInput.value.trim();
+        if (!tokenValue) {
+          showNotice("Debes pegar un token válido.", "error");
+          return;
+        }
+        localStorage.setItem("jwt", tokenValue);
+        const status = validateToken(tokenValue);
+        if (status === "expired") {
+          showNotice("Token guardado, pero ya expiró. Solicita uno nuevo antes de continuar.", "error");
+        } else if (status === "invalid") {
+          showNotice("El token parece inválido. Vuelve a generarlo.", "error");
+        } else {
+          showNotice("Token guardado y vigente. Usa el formulario para filtrar eventos.", "info");
+        }
+      });
+
+      async function loadEvents() {
+        const token = localStorage.getItem("jwt");
+        const params = new URLSearchParams(new FormData(form));
+        const response = await fetch(`/history/events?${params}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!response.ok) {
+          if (response.status === 401) {
+            showNotice("El token expiró o no es válido. Vuelve a iniciar sesión.", "error");
+          } else {
+            showNotice("Error al consultar eventos. Intenta nuevamente.", "error");
+            bodyEl.innerHTML = `<tr><td colspan="4">Error al consultar eventos</td></tr>`;
+          }
+          return;
+        }
+        const data = await response.json();
+        showNotice("", "info", true);
+        bodyEl.innerHTML = data
+          .map(
+            (item) => `
+            <tr>
+              <td>${item.id}</td>
+              <td>${item.event_type}</td>
+              <td>${item.description}</td>
+              <td>${new Date(item.created_at).toLocaleString()}</td>
+            </tr>`
+          )
+          .join("");
+      }
+
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        loadEvents();
+      });
+
+      document.getElementById("export-btn").addEventListener("click", async () => {
+        const token = localStorage.getItem("jwt");
+        const response = await fetch("/history/events/export", {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        if (!response.ok) {
+          if (response.status === 401) {
+            showNotice("El token expiró o no es válido. Vuelve a iniciar sesión.", "error");
+          } else {
+            showNotice("No se pudo exportar el Excel.", "error");
+          }
+          return;
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "historial.xlsx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+      });
+
+      // Espera a que el usuario aplique filtros manualmente
+      function showNotice(message, type = "info", hide = false) {
+        if (hide || !message) {
+          noticeEl.style.display = "none";
+          noticeEl.textContent = "";
+          noticeEl.className = "";
+          return;
+        }
+        noticeEl.textContent = message;
+        noticeEl.className = type === "error" ? "error" : "info";
+        noticeEl.style.display = "block";
+      }
+
+      function validateToken(token) {
+        const parts = token.split(".");
+        if (parts.length !== 3) {
+          return "invalid";
+        }
+        try {
+          const payload = JSON.parse(atob(base64UrlToBase64(parts[1])));
+          if (!payload.exp) {
+            return "unknown";
+          }
+          const now = Math.floor(Date.now() / 1000);
+          return payload.exp < now ? "expired" : "valid";
+        } catch (error) {
+          return "invalid";
+        }
+      }
+
+      function base64UrlToBase64(value) {
+        return value.replace(/-/g, "+").replace(/_/g, "/");
+      }
+    </script>
+  </body>
+</html>
+
